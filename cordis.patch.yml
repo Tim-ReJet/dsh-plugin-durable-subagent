@@ -1,0 +1,20 @@
+# Bundle patch for dsh-plugin-durable-subagent.
+#
+# One insert over the profile root. The plugin registers a `durable` provider on
+# `ctx.subagents` and, unless disabled, the model-facing `durable_subagent` tool.
+# Later bundle patches and the user's profile cordis.patch.yml address the row by
+# id (`durable-subagent`), with the last write winning per row.
+
+- insert:
+    - id: durable-subagent
+      name: 'dsh-plugin-durable-subagent'
+      config:
+        # The `ctx.subagents` registry name this plugin registers.
+        provider: durable
+        # The pi-durable-subagents executable, argv[0] only.
+        command: pi-durable-subagents
+        # Which pi agent definition each delegation runs as.
+        agent: worker
+        # Register the model-facing tool.
+        enableTool: true
+        tool: durable_subagent

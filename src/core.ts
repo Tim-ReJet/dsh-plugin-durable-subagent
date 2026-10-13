@@ -1,0 +1,182 @@
+/**
+ * The convergence state machine.
+ *
+ * DSH's session checkpoint policy durably records execution intent and tells
+ * side-effecting tools to forward `exec.callId` as an idempotency key; it does
+ * not promise exactly-once effects. pi-durable-subagents decides one request id
+ * once. {@link converge} joins the two: read the durable state first, submit
+ * only when the id is undecided, and never re-submit an id the CLI has already
+ * decided.
+ *
+ * The read-before-write order is what makes a crash converge. A process that
+ * died between deciding a submission and reporting it leaves a durable decision
+ * behind; the next attempt reads it instead of executing again.
+ *
+ * @module dsh-plugin-durable-subagent/core
+ */
+
+import type { DsaClient, DescribeQuestion, DescribeResult } from './cli.ts'
+
+/** One delegation to submit under a durable identity. */
+export interface DelegationRequest {
+  /** The request id: the CLI's identity for this submission. */
+  readonly requestId: string
+  /** The `subagents` tool run form, as plain JSON. */
+  readonly spec: unknown
+}
+
+/** How {@link converge} ended. */
+export type ConvergenceOutcome =
+  | { readonly kind: 'sealed'; readonly wid?: string; readonly snapshot?: DescribeResult }
+  | { readonly kind: 'running'; readonly wid?: string; readonly snapshot?: DescribeResult }
+  | { readonly kind: 'pending'; readonly wid?: string; readonly snapshot?: DescribeResult }
+  | { readonly kind: 'asking'; readonly wid?: string; readonly questions: readonly DescribeQuestion[]; readonly snapshot?: DescribeResult }
+  | { readonly kind: 'rejected'; readonly reason: string }
+  | { readonly kind: 'failed'; readonly message: string }
+
+/** Tuning for {@link converge}. */
+export interface ConvergeOptions {
+  /** Submission attempts before giving up. Default 3. */
+  readonly attempts?: number
+  /** Wait between attempts, in milliseconds. Default 250. */
+  readonly delayMs?: number
+  /** Injection point for waiting. */
+  readonly sleep?: (ms: number) => Promise<void>
+  /** Observes each read, for diagnostics and tests. */
+  readonly onAttempt?: (attempt: number, snapshot: DescribeResult) => void
+}
+
+/** Tuning for {@link settle}. */
+export interface SettleOptions {
+  /** Poll deadline in milliseconds. Default 600000. */
+  readonly timeoutMs?: number
+  /** Wait between polls in milliseconds. Default 1000. */
+  readonly intervalMs?: number
+  readonly sleep?: (ms: number) => Promise<void>
+  readonly now?: () => number
+}
+
+const defaultSleep = async (ms: number): Promise<void> => {
+  await new Promise<void>(resolve => { setTimeout(resolve, ms) })
+}
+
+const describe2string = (snapshot: DescribeResult): string =>
+  snapshot.readError ?? snapshot.reason ?? snapshot.error ?? snapshot.status ?? snapshot.state
+
+function terminal(snapshot: DescribeResult): ConvergenceOutcome | undefined {
+  switch (snapshot.state) {
+    case 'sealed':
+      return { kind: 'sealed', ...snapshot.wid !== undefined ? { wid: snapshot.wid } : {}, snapshot }
+    case 'rejected':
+      return { kind: 'rejected', reason: `the request was rejected: ${describe2string(snapshot)}` }
+    case 'pruned':
+      return { kind: 'rejected', reason: `the request was pruned: ${describe2string(snapshot)}` }
+    default:
+      return undefined
+  }
+}
+
+function observation(snapshot: DescribeResult, fallbackWid?: string): ConvergenceOutcome {
+  const wid = snapshot.wid ?? fallbackWid
+  const withWid = wid !== undefined ? { wid } : {}
+  switch (snapshot.state) {
+    case 'asking':
+      return { kind: 'asking', ...withWid, questions: snapshot.questions, snapshot }
+    case 'running':
+      return { kind: 'running', ...withWid, snapshot }
+    case 'pending':
+      return { kind: 'pending', ...withWid, snapshot }
+    default:
+      // A read the CLI could not answer does not un-apply a submission.
+      return { kind: 'running', ...withWid, snapshot }
+  }
+}
+
+/**
+ * Submit one delegation at most once, and report what the durable record says.
+ *
+ * Terminal states are returned from the read alone, so a retry after a crash
+ * never reaches the CLI's `run`.
+ *
+ * @param client - the CLI client.
+ * @param request - the delegation.
+ * @param options - retry tuning.
+ * @returns the outcome, never throwing for a rejected or undecided request.
+ */
+export async function converge(
+  client: DsaClient,
+  request: DelegationRequest,
+  options: ConvergeOptions = {},
+): Promise<ConvergenceOutcome> {
+  const attempts = Math.max(1, options.attempts ?? 3)
+  const delayMs = options.delayMs ?? 250
+  const sleep = options.sleep ?? defaultSleep
+  let snapshot = await client.describe(request.requestId)
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    options.onAttempt?.(attempt, snapshot)
+    const decided = terminal(snapshot)
+    if (decided !== undefined) return decided
+    // Already underway or waiting on a question: submitting again would be a
+    // no-op at best and must not be mistaken for a new execution.
+    if (snapshot.state === 'running' || snapshot.state === 'asking') return observation(snapshot)
+
+    const submitted = await client.submit(request.requestId, request.spec)
+    switch (submitted.kind) {
+      case 'applied': {
+        const after = await client.describe(request.requestId)
+        return terminal(after) ?? observation(after, submitted.wid)
+      }
+      case 'rejected':
+        return { kind: 'rejected', reason: `the request was rejected: ${submitted.reason ?? 'no reason given'}` }
+      case 'conflict':
+        return {
+          kind: 'failed',
+          message: `request id ${request.requestId} already names other content, so nothing was sent`
+            + (submitted.reason !== undefined ? `: ${submitted.reason}` : ''),
+        }
+      case 'failed':
+        if (!submitted.retryable) return { kind: 'failed', message: submitted.message }
+        break
+      case 'pending':
+        break
+    }
+
+    if (attempt < attempts) {
+      await sleep(delayMs)
+      snapshot = await client.describe(request.requestId)
+    }
+  }
+
+  return {
+    kind: 'failed',
+    message: `the submission stayed undecided after ${attempts} attempts (last read: ${describe2string(snapshot)})`,
+  }
+}
+
+/**
+ * Poll one request until it settles.
+ *
+ * @param client - the CLI client.
+ * @param requestId - the durable request identity.
+ * @param options - poll tuning.
+ * @returns the terminal snapshot, or the last read with state `timeout`.
+ */
+export async function settle(
+  client: DsaClient,
+  requestId: string,
+  options: SettleOptions = {},
+): Promise<DescribeResult | { readonly state: 'timeout'; readonly last: DescribeResult }> {
+  const timeoutMs = options.timeoutMs ?? 600_000
+  const intervalMs = options.intervalMs ?? 1000
+  const sleep = options.sleep ?? defaultSleep
+  const now = options.now ?? Date.now
+  const deadline = now() + timeoutMs
+  let snapshot = await client.describe(requestId)
+  for (;;) {
+    if (snapshot.state === 'sealed' || snapshot.state === 'rejected' || snapshot.state === 'pruned') return snapshot
+    if (now() >= deadline) return { state: 'timeout', last: snapshot }
+    await sleep(intervalMs)
+    snapshot = await client.describe(requestId)
+  }
+}
