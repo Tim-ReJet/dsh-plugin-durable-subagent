@@ -41,7 +41,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "typecheck:checkout": "tsc -p tsconfig.checkout.json --noEmit",
     "test": "node --test \"test/*.test.ts\"",
     "check": "npm run typecheck && npm test",
     "prepack": "npm run build"
