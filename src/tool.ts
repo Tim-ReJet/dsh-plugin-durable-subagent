@@ -13,7 +13,7 @@
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { DsaClient, DescribeResult } from './cli.ts'
-import { converge } from './core.ts'
+import { converge, summarize } from './core.ts'
 import { requestIdForToolCall, scopedRequestId } from './ids.ts'
 
 /** The tool's verbs. */
@@ -36,26 +36,35 @@ interface DurableToolValue {
   readonly request: string
   readonly state: string
   readonly wid?: string
+  readonly output?: string
   readonly detail?: string
 }
 
 /**
  * Reduce any snapshot to the tool's flat, model-facing value.
+ *
+ * A sealed workflow reports the calls' output; a failure is named per call,
+ * because the workflow's own status stays `done`.
+ *
  * @param request - the durable request identity.
  * @param snapshot - the durable state.
  * @returns the tool value.
  */
 function fromSnapshot(request: string, snapshot: DescribeResult): DurableToolValue {
+  const summary = summarize(snapshot)
+  const asking = snapshot.questions.length > 0
+    ? snapshot.questions.map(question => `${question.call ?? 'call'} asks (qid ${question.qid ?? '?'} rev ${question.rev ?? '?'}): ${question.text ?? ''}`).join('; ')
+    : undefined
   const detail = snapshot.readError
-    ?? snapshot.error
+    ?? (!summary.ok ? `failed: ${summary.diagnostic ?? 'no detail'}` : undefined)
+    ?? asking
     ?? snapshot.reason
-    ?? (snapshot.questions.length > 0
-      ? snapshot.questions.map(question => `${question.call ?? 'call'} asks (qid ${question.qid ?? '?'} rev ${question.rev ?? '?'}): ${question.text ?? ''}`).join('; ')
-      : undefined)
+    ?? snapshot.error
   return {
     request,
     state: snapshot.state,
     ...snapshot.wid !== undefined ? { wid: snapshot.wid } : {},
+    ...summary.output.length > 0 ? { output: summary.output } : {},
     ...detail !== undefined && detail.length > 0 ? { detail } : {},
   }
 }
@@ -114,12 +123,15 @@ export function defineDurableTool(options: DurableToolOptions) {
           request: { type: 'string', required: true },
           state: { type: 'string', required: true },
           wid: { type: 'string' },
+          output: { type: 'string' },
           detail: { type: 'string' },
         },
       },
       render: (_args, value) => [{
         type: 'text',
-        text: `${value.state}: ${value.detail ?? value.wid ?? ''}`.trim().replace(/:$/, ''),
+        text: value.output !== undefined
+          ? value.output
+          : `${value.state}: ${value.detail ?? value.wid ?? ''}`.trim().replace(/:$/, ''),
       }],
     },
     isConcurrencySafe: () => true,

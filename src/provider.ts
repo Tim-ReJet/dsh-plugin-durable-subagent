@@ -23,7 +23,7 @@ import type {
   SubagentRun,
 } from '@deepseek-ai/dsh-subagent'
 import type { DsaClient, DescribeResult } from './cli.ts'
-import { converge, settle } from './core.ts'
+import { converge, settle, summarize } from './core.ts'
 import { requestIdForContent, scopedRequestId } from './ids.ts'
 
 /** The diagnostic limit the seam sets for provider-authored failure text. */
@@ -90,6 +90,10 @@ export function promptText(prompt: readonly unknown[]): string {
 
 /**
  * Map one durable snapshot onto the seam's terminal result.
+ *
+ * Success is read per call, not from the workflow's `status`: a workflow whose
+ * calls all failed still reports `done`.
+ *
  * @param snapshot - the sealed, rejected, or unreadable snapshot.
  * @returns the result the run handle resolves with.
  */
@@ -101,19 +105,14 @@ export function toResult(snapshot: DescribeResult | undefined): SubagentResult {
     const detail = snapshot.reason ?? snapshot.readError ?? `the request was ${snapshot.state}`
     return { output: [], stopReason: 'error', diagnostic: clip(detail) }
   }
-  const output: SubagentResult['output'] = snapshot.output !== undefined && snapshot.output.length > 0
-    ? [textBlock(snapshot.output)]
-    : []
-  const stopReason = snapshot.status === 'failed'
-    ? 'error'
-    : snapshot.status === 'stopped'
-      ? 'aborted'
-      : 'completed'
-  const diagnostic = snapshot.error ?? snapshot.readError
+  const summary = summarize(snapshot)
+  const output: SubagentResult['output'] = summary.output.length > 0 ? [textBlock(summary.output)] : []
+  const stopped = snapshot.status === 'stopped' || snapshot.calls.some(call => call.status === 'stopped')
+  const stopReason = !summary.ok ? 'error' : stopped ? 'aborted' : 'completed'
   return {
     output,
     ...snapshot.structured !== undefined ? { structured: snapshot.structured } : {},
-    ...diagnostic !== undefined ? { diagnostic: clip(diagnostic) } : {},
+    ...summary.diagnostic !== undefined ? { diagnostic: clip(summary.diagnostic) } : {},
     stopReason,
   }
 }

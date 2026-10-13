@@ -68,7 +68,7 @@ Tool calls append after the reusable history prefix. Nothing here rewrites earli
 
 ## Known Limitations and Deferred Work
 
-- **The `describe --json` field mapping is unverified against a live CLI.** The parser reads a `state` field and otherwise infers the state from the fields the documented vocabulary pairs with it; `test/describe.test.ts` pins both. Confirm against a real `pi-durable-subagents describe --key <id> --json` before relying on the inference path.
+- **A linked plugin resolves its imports from its own repository.** `dsh plugin add <path>` records a `link:`, and Node follows the symlink to the plugin's real path, so `@deepseek-ai/*` is resolved from the plugin directory and never from the profile. The local install must therefore carry a complete closure: `npm install` resolves this package's harness peers, while `npm install --legacy-peer-deps` leaves `@deepseek-ai/dsh-tools` without the nine packages it declares as peers, and the profile then fails to boot with `failed to import loader entry durable-subagent (dsh-plugin-durable-subagent): Cannot find package '@deepseek-ai/dsh-scope'`. A published install from npm does not have this problem.
 - **`cwd` is part of the submission digest.** A retry from a different working directory is a `request-conflict` rather than the first outcome. The default is stable for the life of the harness process; a per-session `cwd` is not yet wired.
 - **The provider cannot be replay-stable.** `ResolvedSubagentStartRequest` carries no call identity, so only the tool path gets one execution per call. Making the provider path exact needs a durable run identity on the request; that is a harness change.
 - **`dispose()` stops a run but does not await quiescence.** The orchestrator is a separate process and owns its own teardown, so the run handle cannot observe the child's exit.
@@ -76,15 +76,55 @@ Tool calls append after the reusable history prefix. Nothing here rewrites earli
 - **No tool filtering, persona, or delegation depth.** The provider reports `outputSchema` only; a request needing another capability is rejected loudly by the subagent service rather than silently ignored.
 - **`outputSchema` validation is delegated.** `pi-durable-subagents` validates a `report` against the schema it was handed before sealing, so a sealed `data` payload is schema-valid; the plugin does not re-validate it.
 - **The orchestrator is not supervised.** The plugin neither starts nor restarts `pi-durable-subagents`; it relies on the orchestrator's own lazy start, lock, and idle exit. Running it under `ctx.subprocess` would make harness disposal kill it.
+- **A failure is per call.** A workflow reports `status: "done"` even when every call inside it failed, and `output`/`error` live on the calls. `summarize()` reads them there; the read-only `status` view alone would call a failed delegation completed.
 
 ## Verification
 
+Phase 0 exercised the real `pi-durable-subagents` 1.0.39 CLI against a real orchestrator, and mounted the bundle into a real DeepSeek Harness profile.
+
 | Check | Result |
 | --- | --- |
-| `tsc --noEmit` against published `@deepseek-ai/dsh-subagent`/`dsh-tools` 0.1.1-rc.2, `cordis` 4.x, `schemastery` 3.x | clean |
-| `node --test` keyless suite (fixture CLI, no harness and no pi) | 25 passed |
-| `dsh-plugin-doctor` | 10 passed, 0 errors, 1 warning (no origin remote), 2 skipped (repo age, topic) |
-| A live `pi-durable-subagents` binary, a real harness boot, and a real crash | **not verified** |
+| `npm run typecheck` against published `@deepseek-ai/dsh-subagent`/`dsh-tools` 0.1.1-rc.2, `cordis` 4.x, `schemastery` 3.x | clean |
+| `node --test` keyless suite (fixture CLI, no harness and no pi) | 32 passed |
+| `dsh-plugin-doctor` | 10 passed, 0 errors; remaining items are a new repository's age and remote |
+| `npm run build` + `npm pack --dry-run` | emits `lib/*.js` + `lib/types/*.d.ts`; 22 files |
+| `describe --key <id> --json` reply shapes | confirmed against the real CLI; payloads pinned in `test/fixtures/real-replies.json` |
+| `converge()` against the real CLI, after a "crashed" caller left a durable decision | one read, **zero** submissions; the retry returned the first `wid` |
+| Identical resubmission under one id | exit 0 with the same `wid` and `created: false` |
+| Same id, different content | exit 3 `request-conflict`, `state` echoed |
+| Bundle installed with `dsh plugin --profile web add`, composed tree | row `durable-subagent` present with its config |
+| Headless boot with the plugin mounted | loader entries activate; the run stops at `MISSING_CREDENTIAL`, not at the plugin |
+| A model-driven `durable_subagent` call inside a live session | **not verified** (no provider key on this machine) |
+| An orchestrator crash between decision and execution | **not verified**; the crash window tested is the caller's |
+
+### Phase 0 evidence
+
+Submitting one id twice against the real CLI:
+
+```text
+$ pi-durable-subagents run --request spike-1 --spec spec.json --json
+{"request":"spike-1","wid":"01M4THR3CMT54R65BASRA9QX3V","created":true,"spec_digest":"3a8fdf42…"}
+$ pi-durable-subagents run --request spike-1 --spec spec.json --json
+{"request":"spike-1","wid":"01M4THR3CMT54R65BASRA9QX3V","created":false,"spec_digest":"3a8fdf42…"}
+```
+
+Driving this plugin's own `converge()` at the real CLI through a shim that logs every invocation, where the first caller submitted and then "died" without reading its reply:
+
+```text
+CLI invocations: run -> describe -> describe -> run -> describe -> describe -> run
+converge after the crash: running (wid 01M4THR3CMT54R65BASRA9QX3V)
+```
+
+The three `run` calls are the crashed caller, one fresh-id convergence, and a deliberate conflicting probe. `converge` issued none of them for the already-decided id.
+
+A workflow whose only call failed reports `status: "done"`:
+
+```text
+$ pi-durable-subagents describe --key spike-1 --json
+{"state":"sealed","status":"done","calls":[{"status":"failed","ok":false,"error":"lost ×5","output":""}]}
+```
+
+This is why `summarize()` reads success per call. The run cost nothing: `usage` was `0` in and `0` out.
 
 ## License
 

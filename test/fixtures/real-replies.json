@@ -1,0 +1,72 @@
+{
+  "absent": { "state": "absent", "request": "spike-absent-1" },
+  "running": {
+    "state": "running",
+    "wid": "01M4THR3CMT54R65BASRA9QX3V",
+    "request": "spike-1",
+    "spec_digest": "3a8fdf42305ef3c50f69024a9f60a6ac83297129bca7ac4c2d281422bd0b58ce",
+    "status": "running",
+    "calls": [
+      {
+        "key": "tasks:0",
+        "gen": 1,
+        "phase": "running",
+        "agent": "worker",
+        "model": "minimax/MiniMax-M2.7-highspeed",
+        "waiting": { "slot": "minimax 1 (no limit)" }
+      }
+    ],
+    "kind": "run"
+  },
+  "sealedWithFailedCall": {
+    "state": "sealed",
+    "wid": "01M4THR3CMT54R65BASRA9QX3V",
+    "request": "spike-1",
+    "spec_digest": "3a8fdf42305ef3c50f69024a9f60a6ac83297129bca7ac4c2d281422bd0b58ce",
+    "status": "done",
+    "calls": [
+      {
+        "key": "tasks:0",
+        "gen": 1,
+        "phase": "sealed",
+        "agent": "worker",
+        "model": "minimax/MiniMax-M2.7-highspeed",
+        "status": "failed",
+        "ok": false,
+        "error": "lost ×5",
+        "output": ""
+      }
+    ],
+    "attention": [
+      {
+        "id": "finished:01M4THR3CMT54R65BASRA9QX3V",
+        "rev": 1,
+        "kind": "finished",
+        "text": "01M4THR3CMT54R65BASRA9QX3V done: 1 failed\ntasks:0: failed\n  Error: lost ×5"
+      }
+    ],
+    "lastFence": {
+      "at": 1791892403301,
+      "exec": "01M4THR3CMT54R65BASRA9QX3V@1/tasks:0@1#1.5",
+      "reason": "process-died"
+    },
+    "kind": "run"
+  },
+  "sealedWithOutput": {
+    "state": "sealed",
+    "wid": "w-with-output",
+    "request": "spike-2",
+    "status": "done",
+    "calls": [
+      { "key": "tasks:0", "gen": 1, "phase": "sealed", "agent": "worker", "status": "done", "ok": true, "output": "the receipt\n" }
+    ],
+    "kind": "run"
+  },
+  "conflict": {
+    "request": "dfaa11c7c28-call-7-9aa1a0d0aa0b28cf",
+    "error": "request-conflict",
+    "wid": "01M4THSMCFSE12NVGTJT0MGBSX",
+    "spec_digest": "5ee6389a6709c81e322902a39ef58ffa5d518b311d9876a7cf8571c34ef70c51",
+    "state": "running"
+  }
+}

@@ -117,6 +117,27 @@ export interface DescribeQuestion {
   readonly text?: string
 }
 
+/**
+ * One call inside a workflow, as `describe` reports it.
+ *
+ * A workflow's own `status` is `done` even when its calls failed, so success has
+ * to be read here, per call.
+ */
+export interface DescribeCall {
+  readonly key?: string
+  readonly gen?: number
+  readonly phase?: string
+  readonly agent?: string
+  readonly model?: string
+  readonly status?: string
+  /** Present once the call settles; `false` is a failed call. */
+  readonly ok?: boolean
+  readonly error?: string
+  readonly output?: string
+  /** The schema-validated structured result, when the run asked for one. */
+  readonly data?: unknown
+}
+
 /** One read-only snapshot of a durable request. */
 export interface DescribeResult {
   readonly state: DescribeState
@@ -127,6 +148,7 @@ export interface DescribeResult {
   readonly error?: string
   readonly structured?: unknown
   readonly questions: readonly DescribeQuestion[]
+  readonly calls: readonly DescribeCall[]
   readonly raw: unknown
   /** Present when the read itself failed (command missing, unparseable reply). */
   readonly readError?: string
@@ -206,7 +228,7 @@ const asNumber = (value: unknown): number | undefined => typeof value === 'numbe
  */
 export function classifyDescribe(raw: unknown): DescribeResult {
   const record = asRecord(raw)
-  if (record === undefined) return { state: 'unknown', questions: [], raw }
+  if (record === undefined) return { state: 'unknown', questions: [], calls: [], raw }
 
   const questions: DescribeQuestion[] = []
   const asking = record.asking ?? record.questions
@@ -224,6 +246,45 @@ export function classifyDescribe(raw: unknown): DescribeResult {
       if (rev !== undefined) item.rev = rev
       if (text !== undefined) item.text = text
       questions.push(item)
+    }
+  }
+
+  const calls: DescribeCall[] = []
+  if (Array.isArray(record.calls)) {
+    for (const entry of record.calls) {
+      const call = asRecord(entry)
+      if (call === undefined) continue
+      const item: {
+        key?: string
+        gen?: number
+        phase?: string
+        agent?: string
+        model?: string
+        status?: string
+        ok?: boolean
+        error?: string
+        output?: string
+        data?: unknown
+      } = {}
+      const key = asString(call.key)
+      const gen = asNumber(call.gen)
+      const phase = asString(call.phase)
+      const agent = asString(call.agent)
+      const model = asString(call.model)
+      const status = asString(call.status)
+      const error = asString(call.error)
+      const output = asString(call.output)
+      if (key !== undefined) item.key = key
+      if (gen !== undefined) item.gen = gen
+      if (phase !== undefined) item.phase = phase
+      if (agent !== undefined) item.agent = agent
+      if (model !== undefined) item.model = model
+      if (status !== undefined) item.status = status
+      if (typeof call.ok === 'boolean') item.ok = call.ok
+      if (error !== undefined) item.error = error
+      if (output !== undefined) item.output = output
+      if (call.data !== undefined) item.data = call.data
+      calls.push(item)
     }
   }
 
@@ -247,8 +308,9 @@ export function classifyDescribe(raw: unknown): DescribeResult {
     error?: string
     structured?: unknown
     questions: readonly DescribeQuestion[]
+    calls: readonly DescribeCall[]
     raw: unknown
-  } = { state, questions, raw }
+  } = { state, questions, calls, raw }
   const wid = asString(record.wid)
   const status = asString(record.status)
   const reason = asString(record.reason)
@@ -308,13 +370,14 @@ export class DsaClient {
     try {
       result = await this.#run(argv, undefined, this.#options())
     } catch (error) {
-      return { state: 'unknown', questions: [], raw: undefined, readError: messageOf(error) }
+      return { state: 'unknown', questions: [], calls: [], raw: undefined, readError: messageOf(error) }
     }
     const parsed = parseJsonReply(result.stdout)
     if (parsed === undefined) {
       return {
         state: 'unknown',
         questions: [],
+        calls: [],
         raw: { code: result.code, signal: result.signal, stdout: result.stdout, stderr: result.stderr },
         readError: result.code === DSA_EXIT.applied
           ? 'describe printed no JSON object'

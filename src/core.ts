@@ -154,6 +154,64 @@ export async function converge(
   }
 }
 
+/** The settled truth of one workflow snapshot. */
+export interface SnapshotSummary {
+  /** True when no call failed. Meaningful once the workflow is sealed. */
+  readonly ok: boolean
+  /** The calls' joined output, or the top-level output when the CLI carries one. */
+  readonly output: string
+  /** Why the run failed, when it did. */
+  readonly diagnostic?: string
+}
+
+/**
+ * Read a workflow's real outcome.
+ *
+ * A workflow's own `status` is `done` even when every call inside it failed, and
+ * `output` and `error` live on the calls rather than at the top level. Verified
+ * against `pi-durable-subagents` 1.0.39: a run whose only call was `lost ×5`
+ * reports `{"state":"sealed","status":"done","calls":[{"status":"failed","ok":false,"error":"lost ×5"}]}`.
+ *
+ * @param snapshot - one durable state read.
+ * @returns the outcome a consumer should present.
+ */
+export function summarize(snapshot: DescribeResult): SnapshotSummary {
+  const failed = snapshot.calls.filter(call => call.ok === false || call.status === 'failed')
+  const callOutput = snapshot.calls
+    .map(call => call.output ?? '')
+    .filter(text => text.length > 0)
+  const output = snapshot.output !== undefined && snapshot.output.length > 0
+    ? snapshot.output
+    : callOutput.join('\n')
+  const detail = failed.find(call => call.error !== undefined && call.error.length > 0)?.error
+    ?? snapshot.error
+    ?? snapshot.readError
+    ?? snapshot.calls.find(call => call.error !== undefined && call.error.length > 0)?.error
+    ?? attentionText(snapshot.raw)
+  return {
+    ok: failed.length === 0,
+    output,
+    ...detail !== undefined && detail.length > 0 ? { diagnostic: detail } : {},
+  }
+}
+
+/**
+ * The first attention line a snapshot carries, when it has one.
+ * @param raw - the parsed reply.
+ * @returns the attention text, or undefined.
+ */
+function attentionText(raw: unknown): string | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const attention = (raw as { attention?: unknown }).attention
+  if (!Array.isArray(attention)) return undefined
+  for (const entry of attention) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const text = (entry as { text?: unknown }).text
+    if (typeof text === 'string' && text.length > 0) return text
+  }
+  return undefined
+}
+
 /**
  * Poll one request until it settles.
  *
