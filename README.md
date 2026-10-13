@@ -94,7 +94,9 @@ Phase 0 exercised the real `pi-durable-subagents` 1.0.39 CLI against a real orch
 | Same id, different content | exit 3 `request-conflict`, `state` echoed |
 | Bundle installed with `dsh plugin --profile web add`, composed tree | row `durable-subagent` present with its config |
 | Headless boot with the plugin mounted | loader entries activate; the run stops at `MISSING_CREDENTIAL`, not at the plugin |
-| A model-driven `durable_subagent` call inside a live session | **not verified** (no provider key on this machine) |
+| A model-driven `durable_subagent` call in a live session | verified end to end: `run` → `status` ×2 → `sealed`, addressed by `request` |
+| The same call driven by the wid instead of the request id | returns `absent`; the render now leads with `request=` for this reason |
+| A real `pi` 1.0.2 child completing a model call | **not verified**: the throwaway `pi` had no hydrated model catalog and reported `Unknown provider: unknown` |
 | An orchestrator crash between decision and execution | **not verified**; the crash window tested is the caller's |
 
 ### Phase 0 evidence
@@ -125,6 +127,23 @@ $ pi-durable-subagents describe --key spike-1 --json
 ```
 
 This is why `summarize()` reads success per call. The run cost nothing: `usage` was `0` in and `0` out.
+
+### Phase 0b evidence
+
+A real DeepSeek Harness headless session, with the bundle mounted and a real `pi-durable-subagents` 1.0.39 CLI on `PATH`, was asked to delegate one task. Its own report:
+
+```text
+- Request id: df9631829b6-call-00-xnXLGCeOhmS8M4PETs0m0219-e847ef97bab53919
+- Final state: sealed
+- Succeeded: No — the delegation failed.
+- Output / error (verbatim):
+  sealed: request=df9631829b6-…-e847ef97bab53919 (wid 01M4TJKGB6Q3ZX7XNCKW5DX2PG) —
+  failed: lost ×5; last error: Unknown provider: unknown
+```
+
+Three things came out of this run. The handle is addressable: the model read `request=` from the render and every `status` call resolved, where the first attempt (which rendered only the wid) got `absent` four times. The call-level failure mapping works in production: a workflow whose only call died is reported as failed with the child's own error, not as a completed delegation with empty output. And the request id is now on-grammar — the tool call id was `call_00_zkMrBAcVpchoWOd2TzA93108`, whose underscores are outside `[A-Za-z0-9][A-Za-z0-9._:-]*`.
+
+The child itself never reached a model: the throwaway `pi` 1.0.2 installation had no hydrated model catalog, so it started as `unknown/unknown`. `pi auth check --provider deepseek` reported `invalid_state` both before and after `DEEPSEEK_API_KEY` was supplied from the harness credential store, which is a property of that fresh installation rather than of this plugin.
 
 ## License
 
