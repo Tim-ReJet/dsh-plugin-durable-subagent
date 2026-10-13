@@ -70,6 +70,23 @@ function fromSnapshot(request: string, snapshot: DescribeResult): DurableToolVal
 }
 
 /**
+ * The model-visible line for one value.
+ *
+ * The address is always the `request` value: `describe --key` and `send --to`
+ * resolve that id, and the `wid` a run also reports is not a key the CLI
+ * accepts. Rendering the wid alone left a model with no addressable handle.
+ *
+ * @param value - the tool value.
+ * @returns one line, or the delegation output when it has one.
+ */
+function renderText(value: DurableToolValue): string {
+  if (value.output !== undefined) return value.output
+  const wid = value.wid !== undefined ? ` (wid ${value.wid})` : ''
+  const detail = value.detail !== undefined ? ` — ${value.detail}` : ''
+  return `${value.state}: request=${value.request}${wid}${detail}`
+}
+
+/**
  * Define the tool that submits, inspects, steers, and stops durable delegations.
  * @param options - tool configuration.
  * @returns a registry-ready tool definition.
@@ -80,8 +97,9 @@ export function defineDurableTool(options: DurableToolOptions) {
     description: [
       'Delegate work to a durable subagent that survives a crash of this process.',
       'Each call is decided once: if the harness dies after a delegation was accepted, the same call reports that delegation\'s outcome instead of running it again.',
-      'Use `run` with a task; it returns as soon as the delegation is accepted, not when the work finishes.',
-      'Use `status` to read a delegation\'s durable state, `answer` to reply to a question it asked, `steer` to redirect work in flight, and `stop` to end it.',
+      'Use `run` with a task; it returns as soon as the delegation is accepted, not when the work finishes, and the handle it reports is a `request` value.',
+      'Use `status` with that `request` value to read a delegation\'s durable state, `answer` to reply to a question it asked, `steer` to redirect work in flight, and `stop` to end it.',
+      'A run also reports a `wid` for humans; the CLI does not accept it as an address, so always address by `request`.',
       'A delegation asks a question through its own result; a `status` of `asking` carries the question id and revision an `answer` needs.',
     ].join(' '),
     parameters: {
@@ -100,7 +118,11 @@ export function defineDurableTool(options: DurableToolOptions) {
       },
       to: {
         type: 'string',
-        description: 'The delegation an action addresses: the `request` value a `run` returned (required for every action except `run`).',
+        description: 'The delegation an action addresses: the `request` value a `run` returned (required for every action except `run`). A run also reports a `wid`, which is not an address.',
+      },
+      model: {
+        type: 'string',
+        description: 'For `run`: the `provider/model` to delegate to, when the agent definition does not pin one.',
       },
       message: {
         type: 'string',
@@ -127,12 +149,7 @@ export function defineDurableTool(options: DurableToolOptions) {
           detail: { type: 'string' },
         },
       },
-      render: (_args, value) => [{
-        type: 'text',
-        text: value.output !== undefined
-          ? value.output
-          : `${value.state}: ${value.detail ?? value.wid ?? ''}`.trim().replace(/:$/, ''),
-      }],
+      render: (_args, value) => [{ type: 'text', text: renderText(value) }],
     },
     isConcurrencySafe: () => true,
     async execute(args, exec): Promise<DurableToolValue> {
@@ -147,7 +164,8 @@ export function defineDurableTool(options: DurableToolOptions) {
       if (action === 'run') {
         const task = typeof args.task === 'string' ? args.task.trim() : ''
         if (task.length === 0) throw new Error('`task` is required for action `run`')
-        return await run(task)
+        const model = typeof args.model === 'string' && args.model.length > 0 ? args.model : undefined
+        return await run(task, model)
       }
 
       const to = typeof args.to === 'string' ? args.to.trim() : ''
@@ -182,13 +200,13 @@ export function defineDurableTool(options: DurableToolOptions) {
         ? { request: requestId, state: action === 'answer' ? 'answered' : 'sent', detail: `${action} accepted for ${to}` }
         : { request: requestId, state: outcome.kind, detail: detailOf(outcome) }
 
-      async function run(task: string): Promise<DurableToolValue> {
+      async function run(task: string, model: string | undefined): Promise<DurableToolValue> {
         // The harness durably recorded this call before the body ran, so its id
         // is the replay-stable key the submission needs.
         const requestId = requestIdForToolCall({ sessionId, callId: exec.callId })
         const outcome = await converge(
           options.client,
-          { requestId, spec: { agent: name, task } },
+          { requestId, spec: { agent: name, task, ...model !== undefined ? { model } : {} } },
           {
             ...options.attempts !== undefined ? { attempts: options.attempts } : {},
           },

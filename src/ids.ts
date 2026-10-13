@@ -45,7 +45,7 @@ export function shortHash(value: string, length = 16): string {
  * @returns a request id the CLI accepts.
  */
 export function scopedRequestId(scope: string, local: string): string {
-  const readable = local.replace(/[^A-Za-z0-9._:-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 48)
+  const readable = local.replace(/[^A-Za-z0-9.:-]/g, '-').replace(/^[^A-Za-z0-9]+/, '').slice(0, 48)
   const digest = shortHash(`${scope}\u0000${local}`, 16)
   const id = `d${shortHash(scope, 10)}-${readable.length > 0 ? `${readable}-` : ''}${digest}`
   /* c8 ignore next -- the construction is bounded at 1+10+1+48+1+16 = 77 characters */

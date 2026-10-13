@@ -41,8 +41,16 @@ test('content-derived ids are deterministic and content-sensitive', () => {
   assert.equal(isRequestId(one), true)
 })
 
+test('an underscore in a call id never reaches the request id', () => {
+  // The CLI's grammar is [A-Za-z0-9][A-Za-z0-9._:-]*: no underscore. A real
+  // tool call id arrived as `call_00_zkMrBAcVpchoWOd2TzA93108`.
+  const id = requestIdForToolCall({ sessionId: 's1', callId: 'call_00_zkMrBAcVpchoWOd2TzA93108' })
+  assert.equal(isRequestId(id), true)
+  assert.ok(!id.includes('_'), `underscore survived into ${id}`)
+})
+
 test('scopedRequestId rejects nothing the CLI would refuse', () => {
-  for (const local of ['', 'a', '9', '-leading', 'with space', 'ünïcøde', 'a'.repeat(500)]) {
+  for (const local of ['', 'a', '9', '-leading', 'with space', 'ünïcøde', 'under_score', 'a'.repeat(500)]) {
     const id = scopedRequestId('scope', local)
     assert.equal(isRequestId(id), true, `local ${JSON.stringify(local.slice(0, 12))} produced ${id}`)
   }
