@@ -26,7 +26,9 @@ npm i -g pi-durable-subagents
 dsh plugin --profile web add github:Tim-ReJet/dsh-plugin-durable-subagent
 ```
 
-The install runs `prepare`, which builds `lib/` from TypeScript. Once the package is published the shorter form works:
+`lib/` is checked in. pnpm blocks build scripts for git-hosted packages, so a `prepare` step would fail the install rather than run it. Run `npm run build` after editing the TypeScript to refresh it.
+
+Once the package is published the shorter form works:
 
 ```sh
 dsh plugin --profile web add dsh-plugin-durable-subagent
