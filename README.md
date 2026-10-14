@@ -17,11 +17,22 @@ The join is a read-before-write state machine. Every attempt reads `describe --k
 
 ## Install
 
+Two prerequisites. `pi-durable-subagents` must be on `PATH` (`npm i -g pi-durable-subagents`), or named by the `command` option. Without it every start fails with a message saying so rather than retrying.
+
+The plugin is not on npm yet, so install it from the repository:
+
+```sh
+npm i -g pi-durable-subagents
+dsh plugin --profile web add github:Tim-ReJet/dsh-plugin-durable-subagent
+```
+
+The install runs `prepare`, which builds `lib/` from TypeScript. Once the package is published the shorter form works:
+
 ```sh
 dsh plugin --profile web add dsh-plugin-durable-subagent
 ```
 
-The bundle patch inserts one row, `durable-subagent`. It requires `pi-durable-subagents` on `PATH` (`npm i -g pi-durable-subagents`), or a `command` that names it; without one, every start fails with a message saying so rather than retrying.
+The bundle patch inserts one row, `durable-subagent`.
 
 ## Config
 
